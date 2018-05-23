@@ -57,11 +57,16 @@
 
 #include <linux/io.h>	// virt_to_phys
 #include <linux/hrtimer.h>
+#include <linux/highmem.h> // kmap
 
 #define KASSERT(a, b)		BUG_ON(!(a))
 
 /*----- support for compiling on older versions of linux -----*/
 #include "netmap_linux_config.h"
+
+#ifndef dma_rmb
+#define dma_rmb() rmb()
+#endif /* dma_rmb */
 
 #ifdef NETMAP_LINUX_HAVE_PAGE_REF
 #include <linux/page_ref.h>
@@ -98,9 +103,9 @@
 #ifndef NETMAP_LINUX_HAVE_HRTIMER_FORWARD_NOW
 /* Forward a hrtimer so it expires after the hrtimer's current now */
 static inline u64 hrtimer_forward_now(struct hrtimer *timer,
-                                      ktime_t interval)
+					ktime_t interval)
 {
-        return hrtimer_forward(timer, timer->base->get_time(), interval);
+	return hrtimer_forward(timer, timer->base->get_time(), interval);
 }
 #endif
 
@@ -116,8 +121,9 @@ extern struct net init_net;
 #define netdev_ops	hard_start_xmit
 struct net_device_ops {
 	int (*ndo_start_xmit)(struct sk_buff *skb, struct net_device *dev);
+	int (*ndo_change_mtu)(struct net_device *dev, int new_mtu);
 };
-#endif /* NETDEV_OPS */
+#endif /* !NETDEV_OPS */
 
 #ifndef NETMAP_LINUX_HAVE_NETDEV_TX_T
 #define netdev_tx_t	int
@@ -175,6 +181,10 @@ static inline int skb_checksum_start_offset(const struct sk_buff *skb) {
 #define NM_REG_NETDEV_NOTIF(nb)		register_netdevice_notifier(nb)
 #define NM_UNREG_NETDEV_NOTIF(nb)	unregister_netdevice_notifier(nb)
 #endif /* NETMAP_LINUX_HAVE_REG_NOTIF_RH */
+
+#ifndef NETMAP_LINUX_HAVE_PAGE_TO_VIRT
+#define page_to_virt(p) 		phys_to_virt(page_to_phys(p))
+#endif /* NETMAP_LINUX_HAVE_PAGE_TO_VIRT */
 
 /*----------- end of LINUX_VERSION_CODE dependencies ----------*/
 
@@ -264,8 +274,8 @@ struct thread;
 
 #define m_copydata(m, o, l, b)          skb_copy_bits(m, o, b, l)
 
-#define copyin(_from, _to, _len)	copy_from_user(_to, _from, _len)
-#define copyout(_from, _to, _len)	copy_to_user(_to, _from, _len)
+#define copyin(_from, _to, _len)	(copy_from_user(_to, _from, _len) ? EFAULT : 0)
+#define copyout(_from, _to, _len)	(copy_to_user(_to, _from, _len) ? EFAULT : 0)
 
 /*
  * struct ifnet is remapped into struct net_device on linux.
@@ -295,6 +305,9 @@ void if_rele(struct net_device *ifp);
 /* hook to send from user space */
 netdev_tx_t linux_netmap_start_xmit(struct sk_buff *, struct net_device *);
 
+/* prevent MTU changes while in netmap mode */
+int linux_netmap_change_mtu(struct net_device *dev, int new_mtu);
+
 /* prevent ring params change while in netmap mode */
 int linux_netmap_set_ringparam(struct net_device *, struct ethtool_ringparam *);
 #ifdef NETMAP_LINUX_HAVE_SET_CHANNELS
@@ -310,19 +323,19 @@ int linux_netmap_set_channels(struct net_device *, struct ethtool_channels *);
  * (hard) interrupt context.
  */
 typedef struct {
-        spinlock_t      sl;
-        ulong           flags;
+	spinlock_t      sl;
+	ulong           flags;
 } safe_spinlock_t;
 
 static inline void mtx_lock(safe_spinlock_t *m)
 {
-        spin_lock_irqsave(&(m->sl), m->flags);
+	spin_lock_irqsave(&(m->sl), m->flags);
 }
 
 static inline void mtx_unlock(safe_spinlock_t *m)
 {
-	ulong flags = ACCESS_ONCE(m->flags);
-        spin_unlock_irqrestore(&(m->sl), flags);
+	ulong flags = *(volatile ulong *)&m->flags;
+	spin_unlock_irqrestore(&(m->sl), flags);
 }
 
 #define mtx_init(a, b, c, d)	spin_lock_init(&((a)->sl))
@@ -398,17 +411,6 @@ struct nm_linux_selrecord_t;
 #define	cdev			miscdevice
 #define	cdevsw			miscdevice
 
-
-/*
- * XXX to complete - the dmamap interface
- */
-#define	BUS_DMA_NOWAIT	0
-#define	bus_dmamap_load(_1, _2, _3, _4, _5, _6, _7)
-#define	bus_dmamap_unload(_1, _2)
-
-typedef int (d_mmap_t)(struct file *f, struct vm_area_struct *vma);
-typedef unsigned int (d_poll_t)(struct file * file, struct poll_table_struct *pwait);
-
 /*
  * make_dev_credf() will set an error and return the first argument.
  * This relies on the availability of the 'error' local variable.
@@ -456,16 +458,16 @@ extern struct kernel_param_ops generic_sysctl_ops;
 			((_mode) == CTLFLAG_RD) ? 0444: 0644 )
 
 #define SYSCTL_INT(_base, _oid, _name, _mode, _var, _val, _desc)        \
-        _SYSCTL_BASE(_name, _var, int, _mode)
+	_SYSCTL_BASE(_name, _var, int, _mode)
 
 #define SYSCTL_LONG(_base, _oid, _name, _mode, _var, _val, _desc)       \
-        _SYSCTL_BASE(_name, _var, long, _mode)
+	_SYSCTL_BASE(_name, _var, long, _mode)
 
 #define SYSCTL_ULONG(_base, _oid, _name, _mode, _var, _val, _desc)      \
-        _SYSCTL_BASE(_name, _var, ulong, _mode)
+	_SYSCTL_BASE(_name, _var, ulong, _mode)
 
 #define SYSCTL_UINT(_base, _oid, _name, _mode, _var, _val, _desc)       \
-         _SYSCTL_BASE(_name, _var, uint, _mode)
+	_SYSCTL_BASE(_name, _var, uint, _mode)
 
 // #define TUNABLE_INT(_name, _ptr)
 
@@ -473,16 +475,13 @@ extern struct kernel_param_ops generic_sysctl_ops;
 #define SYSCTL_VNET_INT                 SYSCTL_INT
 
 #define SYSCTL_HANDLER_ARGS             \
-        struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req
+	struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req
 int sysctl_handle_int(SYSCTL_HANDLER_ARGS);
 int sysctl_handle_long(SYSCTL_HANDLER_ARGS);
 
 #define MALLOC_DECLARE(a)
 #define MALLOC_DEFINE(a, b, c)
 
-struct netmap_adapter;
-int netmap_linux_config(struct netmap_adapter *na,
-		u_int *txr, u_int *rxr, u_int *txd, u_int *rxd);
 /* ---- namespaces ------ */
 #ifdef CONFIG_NET_NS
 int netmap_bns_register(void);
@@ -495,5 +494,9 @@ void netmap_bns_unregister(void);
 #endif
 
 #define if_printf(ifp, fmt, ...)  dev_info(&(ifp)->dev, fmt, ##__VA_ARGS__)
+
+#ifndef BIT_ULL
+#define BIT_ULL(nr)	(1ULL << (nr))
+#endif /* !BIT_ULL */
 
 #endif /* NETMAP_BSD_GLUE_H */

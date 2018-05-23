@@ -270,8 +270,6 @@ struct nm_desc {
  * to multiple of 64 bytes and is often faster than dealing
  * with other odd sizes. We assume there is enough room
  * in the source and destination buffers.
- *
- * XXX only for multiples of 64 bytes, non overlapped.
  */
 static inline void
 nm_pkt_copy(const void *_src, void *_dst, int l)
@@ -279,7 +277,7 @@ nm_pkt_copy(const void *_src, void *_dst, int l)
 	const uint64_t *src = (const uint64_t *)_src;
 	uint64_t *dst = (uint64_t *)_dst;
 
-	if (unlikely(l >= 1024)) {
+	if (unlikely(l >= 1024 || l % 64)) {
 		memcpy(dst, src, l);
 		return;
 	}
@@ -786,8 +784,7 @@ nm_parse(const char *ifname, struct nm_desc *d, char *err)
 
 	d->req.nr_flags |= nr_flags;
 	d->req.nr_ringid |= nr_ringid;
-	if (nr_arg2)
-		d->req.nr_arg2 = nr_arg2;
+	d->req.nr_arg2 = nr_arg2;
 
 	d->self = d;
 
@@ -856,10 +853,10 @@ nm_open(const char *ifname, const struct nmreq *req,
 			D("overriding ARG1 %d", parent->req.nr_arg1);
 		d->req.nr_arg1 = new_flags & NM_OPEN_ARG1 ?
 			parent->req.nr_arg1 : 4;
-		if (new_flags & NM_OPEN_ARG2)
+		if (new_flags & NM_OPEN_ARG2) {
 			D("overriding ARG2 %d", parent->req.nr_arg2);
-		d->req.nr_arg2 = new_flags & NM_OPEN_ARG2 ?
-			parent->req.nr_arg2 : 0;
+			d->req.nr_arg2 =  parent->req.nr_arg2;
+		}
 		if (new_flags & NM_OPEN_ARG3)
 			D("overriding ARG3 %d", parent->req.nr_arg3);
 		d->req.nr_arg3 = new_flags & NM_OPEN_ARG3 ?
@@ -1024,26 +1021,41 @@ fail:
 static int
 nm_inject(struct nm_desc *d, const void *buf, size_t size)
 {
-	u_int c, n = d->last_tx_ring - d->first_tx_ring + 1;
+	u_int c, n = d->last_tx_ring - d->first_tx_ring + 1,
+		ri = d->cur_tx_ring;
 
-	for (c = 0; c < n ; c++) {
+	for (c = 0; c < n ; c++, ri++) {
 		/* compute current ring to use */
 		struct netmap_ring *ring;
-		uint32_t i, idx;
-		uint32_t ri = d->cur_tx_ring + c;
+		uint32_t i, j, idx;
+		size_t rem;
 
 		if (ri > d->last_tx_ring)
 			ri = d->first_tx_ring;
 		ring = NETMAP_TXRING(d->nifp, ri);
-		if (nm_ring_empty(ring)) {
-			continue;
+		rem = size;
+		j = ring->cur;
+		while (rem > ring->nr_buf_size && j != ring->tail) {
+			rem -= ring->nr_buf_size;
+			j = nm_ring_next(ring, j);
 		}
+		if (j == ring->tail && rem > 0)
+			continue;
 		i = ring->cur;
+		while (i != j) {
+			idx = ring->slot[i].buf_idx;
+			ring->slot[i].len = ring->nr_buf_size;
+			ring->slot[i].flags = NS_MOREFRAG;
+			nm_pkt_copy(buf, NETMAP_BUF(ring, idx), ring->nr_buf_size);
+			i = nm_ring_next(ring, i);
+			buf += ring->nr_buf_size;
+		}
 		idx = ring->slot[i].buf_idx;
-		ring->slot[i].len = size;
-		nm_pkt_copy(buf, NETMAP_BUF(ring, idx), size);
-		d->cur_tx_ring = ri;
+		ring->slot[i].len = rem;
+		ring->slot[i].flags = 0;
+		nm_pkt_copy(buf, NETMAP_BUF(ring, idx), rem);
 		ring->head = ring->cur = nm_ring_next(ring, i);
+		d->cur_tx_ring = ri;
 		return size;
 	}
 	return 0; /* fail */
@@ -1068,11 +1080,10 @@ nm_dispatch(struct nm_desc *d, int cnt, nm_cb_t cb, u_char *arg)
 	 * of buffers and the int is large enough that we never wrap,
 	 * so we can omit checking for -1
 	 */
-	for (c=0; c < n && cnt != got; c++) {
+	for (c=0; c < n && cnt != got; c++, ri++) {
 		/* compute current ring to use */
 		struct netmap_ring *ring;
 
-		ri = d->cur_rx_ring + c;
 		if (ri > d->last_rx_ring)
 			ri = d->first_rx_ring;
 		ring = NETMAP_RXRING(d->nifp, ri);
@@ -1083,6 +1094,9 @@ nm_dispatch(struct nm_desc *d, int cnt, nm_cb_t cb, u_char *arg)
 			}
 			i = ring->cur;
 			idx = ring->slot[i].buf_idx;
+			/* d->cur_rx_ring doesn't change inside this loop, but
+			 * set it here, so it reflects d->hdr.buf's ring */
+			d->cur_rx_ring = ri;
 			d->hdr.slot = &ring->slot[i];
 			d->hdr.buf = (u_char *)NETMAP_BUF(ring, idx);
 			// __builtin_prefetch(buf);
@@ -1095,7 +1109,6 @@ nm_dispatch(struct nm_desc *d, int cnt, nm_cb_t cb, u_char *arg)
 		d->hdr.flags = 0;
 		cb(arg, &d->hdr, d->hdr.buf);
 	}
-	d->cur_rx_ring = ri;
 	return got;
 }
 

@@ -274,7 +274,7 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 	hwrings = nma_get_nrings(na, NR_TX) + nma_get_nrings(na, NR_RX);
 	for_rx_tx(t) {
 		for (i = 0; i < nma_get_nrings(na, t); i++) {
-			struct netmap_kring *kring = &NMR(na, t)[i];
+			struct netmap_kring *kring = NMR(na, t)[i];
 
 			if ((onoff && nm_kring_pending_on(kring)) ||
 				(!onoff && nm_kring_pending_off(kring))) {
@@ -341,7 +341,7 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 		/* enable netmap mode */
 		for_rx_tx(t) {
 			for (i = 0; i <= nma_get_nrings(na, t); i++) {
-				struct netmap_kring *kring = &NMR(na, t)[i];
+				struct netmap_kring *kring = NMR(na, t)[i];
 
 				if (nm_kring_pending_on(kring)) {
 					kring->nr_mode = NKR_NETMAP_ON;
@@ -353,7 +353,7 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 		nm_clear_native_flags(na);
 		for_rx_tx(t) {
 			for (i = 0; i <= nma_get_nrings(na, t); i++) {
-				struct netmap_kring *kring = &NMR(na, t)[i];
+				struct netmap_kring *kring = NMR(na, t)[i];
 
 				if (nm_kring_pending_off(kring)) {
 					kring->nr_mode = NKR_NETMAP_OFF;
@@ -520,7 +520,6 @@ virtio_netmap_rxsync(struct netmap_kring *kring, int flags)
 	 */
 	if (netmap_no_pendintr || force_update) {
 		uint32_t hwtail_lim = nm_prev(kring->nr_hwcur, lim);
-		uint16_t slot_flags = kring->nkr_slot_flags;
 		struct netmap_adapter *token;
 
 
@@ -547,7 +546,7 @@ virtio_netmap_rxsync(struct netmap_kring *kring, int flags)
 				}
 
 				ring->slot[nm_i].len = len;
-				ring->slot[nm_i].flags = slot_flags;
+				ring->slot[nm_i].flags = 0;
 				nm_i = nm_next(nm_i, lim);
 				n++;
 			}
@@ -627,7 +626,7 @@ virtio_netmap_init_buffers(struct virtnet_info *vi)
 
 	for (r = 0; r < na->num_rx_rings; r++) {
 		COMPAT_DECL_SG
-		struct netmap_ring *ring = na->rx_rings[r].ring;
+		struct netmap_ring *ring = na->rx_rings[r]->ring;
 		struct virtqueue *vq = GET_RX_VQ(vi, r);
 		struct scatterlist *sg = GET_RX_SG(vi, r);
 		struct netmap_slot* slot;
@@ -696,28 +695,6 @@ virtio_netmap_intr(struct netmap_adapter *na, int onoff)
 	}
 }
 
-/* Update the virtio-net device configurations. Number of queues can
- * change dinamically, by 'ethtool --set-channels $IFNAME combined $N'.
- * This is actually the only way virtio-net can currently enable
- * the multiqueue mode.
- */
-static int
-virtio_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
-		     u_int *rxr, u_int *rxd)
-{
-	struct ifnet *ifp = na->ifp;
-	struct virtnet_info *vi = netdev_priv(ifp);
-
-	*txr = ifp->real_num_tx_queues;
-	*txd = virtqueue_get_vring_size(GET_TX_VQ(vi, 0));
-	*rxr = 1;
-	*rxd = virtqueue_get_vring_size(GET_RX_VQ(vi, 0));
-	D("virtio config txq=%d, txd=%d rxq=%d, rxd=%d",
-			*txr, *txd, *rxr, *rxd);
-
-	return 0;
-}
-
 static void
 virtio_netmap_attach(struct virtnet_info *vi)
 {
@@ -733,7 +710,6 @@ virtio_netmap_attach(struct virtnet_info *vi)
 	na.nm_register = virtio_netmap_reg;
 	na.nm_txsync = virtio_netmap_txsync;
 	na.nm_rxsync = virtio_netmap_rxsync;
-	na.nm_config = virtio_netmap_config;
 	na.nm_intr = virtio_netmap_intr;
 
 	ret = netmap_attach_ext(&na, sizeof(struct netmap_virtio_adapter), 1);
