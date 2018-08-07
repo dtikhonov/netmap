@@ -6,6 +6,7 @@ MODNAME=netmap
 DEBUG=1
 UTILS=
 DRVERRFAIL=
+DMASYNC=1
 
 # setelem2n <set> <elem>
 setelem2n()
@@ -328,6 +329,7 @@ Available options:
   --force-debug	       	       build the modules w/ debug symbols (default)
   --no-force-debug	       build the modules w/ or w/o debug symbols,
   --cache=		       dir for reusing/caching of netmap_linux_config.h
+  --without-dmasync	       use this if you are on x86 with a recent NIC and no IOMMU
 
   --cc=                        C compiler to be used for the apps and utils [$cc]
   --ld=                        linker to be used for the apps and utils [$ld]
@@ -652,6 +654,9 @@ for opt do
 		;;
 	--fail-on-driver-errors)
 		DRVERRFAIL=1
+		;;
+	--without-dmasync)
+		DMASYNC=
 		;;
 	*)
 		echo "Unrecognized option: $opt" | warning
@@ -1009,6 +1014,16 @@ EOF
 	  edrv enabled $d && continue
 	  add_file_exists_check patch-$d true "drv_patch_error $d"
   done
+
+  # ax25_ptr
+  add_test 'have AX25PTR' <<EOF
+	#include <linux/netdevice.h>
+
+	void * dummy(struct net_device *dev)
+	{
+		return dev->ax25_ptr;
+	}
+EOF
 
   # iommu support
   add_test 'have IOMMU' <<EOF
@@ -1938,6 +1953,10 @@ EOF
   cat >> config.log <<EOF
 ##############################################################################
 EOF
+
+  if [ -n "$DMASYNC" ]; then
+	  have DMASYNC
+  fi
   
   define DRIVER_SUFFIX \"$drvsuffix\"
   

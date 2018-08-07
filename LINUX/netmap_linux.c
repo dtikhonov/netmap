@@ -1139,7 +1139,7 @@ out:
 EXPORT_SYMBOL(netmap_rings_config_get);
 
 /* Default nm_config implementation for netmap_hw_adapter on Linux. */
-int
+static int
 netmap_linux_config(struct netmap_adapter *na, struct nm_config_info *info)
 {
 	int ret = netmap_rings_config_get(na, info);
@@ -1315,12 +1315,24 @@ linux_netmap_change_mtu(struct net_device *dev, int new_mtu)
 
 /* while in netmap mode, we cannot tolerate any change in the
  * number of rx/tx rings and descriptors
+ *
+ * Linux calls this while holding the rtnl_lock().
  */
 int
 linux_netmap_set_ringparam(struct net_device *dev,
 	struct ethtool_ringparam *e)
 {
+#ifdef NETMAP_LINUX_HAVE_AX25PTR
 	return -EBUSY;
+#else /* !NETMAP_LINUX_HAVE_AX25PTR */
+	struct netmap_adapter *na = NA(dev);
+
+	if (nm_netmap_on(na))
+		return -EBUSY;
+	if (na->magic.save_eto->set_ringparam)
+		return na->magic.save_eto->set_ringparam(dev, e);
+	return -EOPNOTSUPP;
+#endif /* NETMAP_LINUX_HAVE_AX25PTR */
 }
 
 #ifdef NETMAP_LINUX_HAVE_SET_CHANNELS
@@ -1328,7 +1340,17 @@ int
 linux_netmap_set_channels(struct net_device *dev,
 	struct ethtool_channels *e)
 {
+#ifdef NETMAP_LINUX_HAVE_AX25PTR
 	return -EBUSY;
+#else /* !NETMAP_LINUX_HAVE_AX25PTR */
+	struct netmap_adapter *na = NA(dev);
+
+	if (nm_netmap_on(na))
+		return -EBUSY;
+	if (na->magic.save_eto->set_channels)
+		return na->magic.save_eto->set_channels(dev, e);
+	return -EOPNOTSUPP;
+#endif /* NETMAP_LINUX_HAVE_AX25PTR */
 }
 #endif
 
@@ -1436,7 +1458,6 @@ static struct file_operations netmap_fops = {
 };
 
 
-#ifdef WITH_VALE
 #ifdef CONFIG_NET_NS
 #include <net/netns/generic.h>
 
@@ -1573,7 +1594,6 @@ netmap_bns_unregister(void)
 #endif
 }
 #endif /* CONFIG_NET_NS */
-#endif /* WITH_VALE */
 
 /* ##################### kthread wrapper ##################### */
 #include <linux/eventfd.h>
@@ -2558,6 +2578,68 @@ nm_os_selrecord(NM_SELRECORD_T *sr, NM_SELINFO_T *si)
 	poll_wait(sr->file, si, sr->pwait);
 }
 
+void
+nm_os_onattach(struct ifnet *ifp)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter *)na;
+
+#ifdef NETMAP_LINUX_HAVE_NETDEV_OPS
+	if (ifp->netdev_ops) {
+		/* prepare a clone of the netdev ops */
+		hwna->nm_ndo = *ifp->netdev_ops;
+	}
+#endif /* NETMAP_LINUX_HAVE_NETDEV_OPS */
+	hwna->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
+	hwna->nm_ndo.NETMAP_LINUX_CHANGE_MTU = linux_netmap_change_mtu;
+#ifdef NETMAP_LINUX_HAVE_AX25PTR
+	if (ifp->ethtool_ops) {
+		hwna->nm_eto = *ifp->ethtool_ops;
+	}
+	hwna->nm_eto.set_ringparam = linux_netmap_set_ringparam;
+#ifdef NETMAP_LINUX_HAVE_SET_CHANNELS
+	hwna->nm_eto.set_channels = linux_netmap_set_channels;
+#endif /* NETMAP_LINUX_HAVE_SET_CHANNELS */
+#else /* !NETMAP_LINUX_HAVE_AX25PTR */
+#ifdef NETMAP_LINUX_HAVE_SET_CHANNELS
+	na->magic.eto.set_channels = linux_netmap_set_channels;
+#endif /* NETMAP_LINUX_HAVE_SET_CHANNELS */
+#endif /* NETMAP_LINUX_HAVE_AX25PTR */
+	if (na->nm_config == NULL) {
+		hwna->up.nm_config = netmap_linux_config;
+	}
+}
+
+void
+nm_os_onenter(struct ifnet *ifp)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter *)na;
+
+	na->if_transmit = (void *)ifp->netdev_ops;
+	ifp->netdev_ops = &hwna->nm_ndo;
+#ifdef NETMAP_LINUX_HAVE_AX25PTR
+	hwna->save_ethtool = ifp->ethtool_ops;
+	ifp->ethtool_ops = &hwna->nm_eto;
+#else /* NETMAP_LINUX_HAVE_AX25PTR */
+	(void)hwna;
+#endif /* NETMAP_LINUX_HAVE_AX25PTR */
+}
+
+void
+nm_os_onexit(struct ifnet *ifp)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter *)na;
+
+	ifp->netdev_ops = (void *)na->if_transmit;
+#ifdef NETMAP_LINUX_HAVE_AX25PTR
+	ifp->ethtool_ops = hwna->save_ethtool;
+#else /* NETMAP_LINUX_HAVE_AX25PTR */
+	(void)hwna;
+#endif /* NETMAP_LINUX_HAVE_AX25PTR */
+}
+
 module_init(linux_netmap_init);
 module_exit(linux_netmap_fini);
 
@@ -2586,8 +2668,8 @@ EXPORT_SYMBOL(netmap_no_pendintr);	/* XXX mitigation - should go away */
 EXPORT_SYMBOL(netmap_bdg_regops);	/* bridge configuration routine */
 EXPORT_SYMBOL(netmap_bdg_name);		/* the bridge the vp is attached to */
 EXPORT_SYMBOL(nm_bdg_update_private_data);
-EXPORT_SYMBOL(netmap_bdg_create);
-EXPORT_SYMBOL(netmap_bdg_destroy);
+EXPORT_SYMBOL(netmap_vale_create);
+EXPORT_SYMBOL(netmap_vale_destroy);
 EXPORT_SYMBOL(nm_bdg_ctl_attach);
 EXPORT_SYMBOL(nm_bdg_ctl_detach);
 EXPORT_SYMBOL(nm_vi_create);
@@ -2606,6 +2688,11 @@ EXPORT_SYMBOL(netmap_pipe_txsync);	/* used by veth module */
 EXPORT_SYMBOL(netmap_pipe_rxsync);	/* used by veth module */
 #endif /* WITH_PIPES */
 EXPORT_SYMBOL(netmap_verbose);
+EXPORT_SYMBOL(nm_set_native_flags);
+EXPORT_SYMBOL(nm_clear_native_flags);
+#ifndef NETMAP_LINUX_HAVE_AX25PTR
+EXPORT_SYMBOL(linux_netmap_set_ringparam);
+#endif /* NETMAP_LINUX_HAVE_AX25PTR */
 
 MODULE_AUTHOR("http://info.iet.unipi.it/~luigi/netmap/");
 MODULE_DESCRIPTION("The netmap packet I/O framework");
