@@ -76,12 +76,7 @@ index 63c7810e1545..f5fc43c34afa 100644
  {
  	struct virtnet_info *vi = vdev->priv;
 +#ifdef DEV_NETMAP
-+	/* Save the pointer, will go away after netmap_detach(). */
-+	struct netmap_adapter *token = NA(vi->dev);
- 
-+	netmap_detach(vi->dev);
-+	virtio_netmap_clean_used_rings(vi, token);
-+	virtio_netmap_reclaim_unused(vi);
++	virtio_netmap_detach(vi);
 +#endif
  	unregister_hotcpu_notifier(&vi->nb);
  
