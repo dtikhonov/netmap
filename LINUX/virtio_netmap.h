@@ -675,6 +675,12 @@ virtio_netmap_init_buffers(struct virtnet_info *vi)
 		unsigned int i;
 		int err = 0;
 
+		if (sg[0].length == sizeof(vna->shared_rxvhdr) ||
+			sg[0].length == sizeof(vna->shared_rxvhdr.hdr)) {
+			D("RX already configured");
+			continue;
+		}
+
 		slot = netmap_reset(na, NR_RX, r, 0);
 		if (!slot) {
 			continue;
