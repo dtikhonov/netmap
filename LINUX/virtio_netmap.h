@@ -32,6 +32,10 @@
 
 static int virtnet_close(struct ifnet *ifp);
 static int virtnet_open(struct ifnet *ifp);
+static void free_receive_bufs(struct virtnet_info *vi);
+static void free_unused_bufs(struct virtnet_info *vi);
+static void give_pages(struct receive_queue *rq, struct page *page);
+static bool is_xdp_raw_buffer_queue(struct virtnet_info *vi, int q);
 
 #define DEV_NUM_TX_QUEUES(_netdev)	(_netdev)->num_tx_queues
 
