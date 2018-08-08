@@ -272,11 +272,11 @@ static void nm_free_unused_bufs(struct virtnet_info *vi, bool rx, bool tx)
 
 		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL) {
 			if (vi->mergeable_rx_bufs) {
-                put_page(virt_to_head_page(buf));
-            } else if (vi->big_packets) {
-                give_pages(&vi->rq[i], buf);
-            } else {
-                put_page(virt_to_head_page(buf));
+				put_page(virt_to_head_page(buf));
+			} else if (vi->big_packets) {
+				give_pages(&vi->rq[i], buf);
+			} else {
+				put_page(virt_to_head_page(buf));
 			}
 		}
 	}
