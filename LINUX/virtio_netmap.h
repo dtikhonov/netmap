@@ -32,9 +32,6 @@
 
 static int virtnet_close(struct ifnet *ifp);
 static int virtnet_open(struct ifnet *ifp);
-static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
-static void *mergeable_ctx_to_buf_address(unsigned long mrg_ctx);
-static void give_pages(struct receive_queue *rq, struct page *page);
 
 #define DEV_NUM_TX_QUEUES(_netdev)	(_netdev)->num_tx_queues
 
@@ -255,16 +252,6 @@ virtio_netmap_reclaim_unused(struct virtnet_info *vi, bool rx, bool tx)
 	}
 }
 
-static void nm_free_receive_bufs(struct virtnet_info *vi, bool rx, bool tx)
-{
-	int i;
-
-	for (i = 0; rx && i < vi->max_queue_pairs; i++) {
-	while (vi->rq[i].pages)
-		__free_pages(get_a_page(&vi->rq[i], GFP_KERNEL), 0);
-	}
-}
-
 static void nm_free_unused_bufs(struct virtnet_info *vi, bool rx, bool tx)
 {
 	void *buf;
@@ -272,8 +259,12 @@ static void nm_free_unused_bufs(struct virtnet_info *vi, bool rx, bool tx)
 
 	for (i = 0; tx && i < vi->max_queue_pairs; i++) {
 		struct virtqueue *vq = vi->sq[i].vq;
+
 		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL)
-			dev_kfree_skb(buf);
+			if (!is_xdp_raw_buffer_queue(vi, i))
+				dev_kfree_skb(buf);
+			else
+				put_page(virt_to_head_page(buf));
 	}
 
 	for (i = 0; rx && i < vi->max_queue_pairs; i++) {
@@ -281,13 +272,11 @@ static void nm_free_unused_bufs(struct virtnet_info *vi, bool rx, bool tx)
 
 		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL) {
 			if (vi->mergeable_rx_bufs) {
-				unsigned long ctx = (unsigned long)buf;
-				void *base = mergeable_ctx_to_buf_address(ctx);
-				put_page(virt_to_head_page(base));
-			} else if (vi->big_packets) {
-				give_pages(&vi->rq[i], buf);
-			} else {
-				dev_kfree_skb(buf);
+                put_page(virt_to_head_page(buf));
+            } else if (vi->big_packets) {
+                give_pages(&vi->rq[i], buf);
+            } else {
+                put_page(virt_to_head_page(buf));
 			}
 		}
 	}
@@ -376,7 +365,7 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 			 * to support XDP. To avoid deadlock, we temporarily
 			 * release the lock during this call. */
 			rtnl_unlock();
-			nm_free_receive_bufs(vi, rx, tx);
+			free_receive_bufs(vi);
 			rtnl_lock();
 		}
 
