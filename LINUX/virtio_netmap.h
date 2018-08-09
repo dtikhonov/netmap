@@ -264,11 +264,13 @@ static void nm_free_unused_bufs(struct virtnet_info *vi, bool rx, bool tx)
 	for (i = 0; tx && i < vi->max_queue_pairs; i++) {
 		struct virtqueue *vq = vi->sq[i].vq;
 
-		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL)
-			if (!is_xdp_raw_buffer_queue(vi, i))
+		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL) {
+			if (!is_xdp_raw_buffer_queue(vi, i)) {
 				dev_kfree_skb(buf);
-			else
+			} else {
 				put_page(virt_to_head_page(buf));
+			}
+		}
 	}
 
 	for (i = 0; rx && i < vi->max_queue_pairs; i++) {
@@ -313,7 +315,7 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 			if ((onoff && nm_kring_pending_on(kring)) ||
 				(!onoff && nm_kring_pending_off(kring))) {
 				hwrings_pending ++;
-				D ("%s: %s:%d\n", onoff ? "ON" : "OFF", kring->name, i);
+				D ("%3s: %s:%d", onoff ? "ON" : "OFF", kring->name, i);
 				if (t == NR_RX)
 					rx = true;
 				else if (t == NR_TX)
@@ -667,12 +669,6 @@ virtio_netmap_init_buffers(struct virtnet_info *vi)
 		struct netmap_slot* slot;
 		unsigned int i;
 		int err = 0;
-
-		if (sg[0].length == sizeof(vna->shared_rxvhdr) ||
-			sg[0].length == sizeof(vna->shared_rxvhdr.hdr)) {
-			D("RX already configured");
-			continue;
-		}
 
 		slot = netmap_reset(na, NR_RX, r, 0);
 		if (!slot) {
