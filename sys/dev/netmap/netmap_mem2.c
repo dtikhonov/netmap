@@ -1847,14 +1847,18 @@ netmap_free_rings(struct netmap_adapter *na)
 			struct netmap_kring *kring = NMR(na, t)[i];
 			struct netmap_ring *ring = kring->ring;
 
-			if (ring == NULL || kring->users > 0 || (kring->nr_kflags & NKR_NEEDRING)) {
+			if (ring == NULL || kring->users > 0 ||
+											(kring->nr_kflags & NKR_NEEDRING)) {
 				if (netmap_verbose)
-					D("NOT deleting ring %s (ring %p, users %d neekring %d)",
-						kring->name, ring, kring->users, kring->nr_kflags & NKR_NEEDRING);
+					D("NOT deleting ring %s (ring %p users %d needring %d)",
+						kring->name, ring, kring->users,
+						kring->nr_kflags & NKR_NEEDRING);
 				continue;
 			}
 			if (netmap_verbose)
-				D("deleting ring %s", kring->name);
+				D("deleting ring %s (ring %p users %d needring %d)",
+						kring->name, ring, kring->users,
+						kring->nr_kflags & NKR_NEEDRING);
 			if (!(kring->nr_kflags & NKR_FAKERING)) {
 				ND("freeing bufs for %s", kring->name);
 				netmap_free_bufs(na->nm_mem, ring->slot, kring->nkr_num_slots);
@@ -1890,12 +1894,15 @@ netmap_mem2_rings_create(struct netmap_adapter *na)
 			if (ring || (!kring->users && !(kring->nr_kflags & NKR_NEEDRING))) {
 				/* uneeded, or already created by somebody else */
 				if (netmap_verbose)
-					D("NOT creating ring %s (ring %p, users %d neekring %d)",
-						kring->name, ring, kring->users, kring->nr_kflags & NKR_NEEDRING);
+					D("NOT creating ring %s (ring %p users %d needring %d)",
+						kring->name, ring, kring->users,
+						kring->nr_kflags & NKR_NEEDRING);
 				continue;
 			}
 			if (netmap_verbose)
-				D("creating %s", kring->name);
+				D("creating ring %s (ring %p users %d needring %d)",
+						kring->name, ring, kring->users,
+						kring->nr_kflags & NKR_NEEDRING);
 			ndesc = kring->nkr_num_slots;
 			len = sizeof(struct netmap_ring) +
 				  ndesc * sizeof(struct netmap_slot);
