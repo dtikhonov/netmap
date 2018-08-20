@@ -1816,10 +1816,11 @@ netmap_interp_ringid(struct netmap_priv_d *priv, uint32_t nr_mode,
 
 	for_rx_tx(t) {
 		if (nr_flags & excluded_direction[t]) {
+			/* allow host rings in excluded direction */
 			priv->np_qfirst[t] = netmap_all_rings(na, t) - 1;
 			priv->np_qlast[t] = netmap_all_rings(na, t);
-			D("%s: %s %d %d", "SW", nm_txrx2str(t),
-										priv->np_qfirst[t], priv->np_qlast[t]);
+			ND("%s: %s %d %d", "SW", nm_txrx2str(t),
+				priv->np_qfirst[t], priv->np_qlast[t]);
 			continue;
 		}
 		switch (nr_mode) {
@@ -3798,7 +3799,7 @@ netmap_common_irq(struct netmap_adapter *na, u_int q, u_int *work_done)
 	q &= NETMAP_RING_MASK;
 
 	if (netmap_verbose)
-		ND("received %s queue %d", work_done ? "RX" : "TX" , q);
+		RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
 
 	if (q >= nma_get_nrings(na, t))
 		return NM_IRQ_PASS; // not a physical queue
