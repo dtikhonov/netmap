@@ -599,6 +599,19 @@ netmap_bdg_learning(struct nm_bdg_fwd *ft, uint8_t *dst_ring,
 			dst = ht[dh].ports;
 		}
 	}
+	int host = 1;
+	int quic = 2;
+	if (dst == NM_BDG_BROADCAST || dst == quic) {
+		if (ntohs((uint16_t *)buf[12]) == ETH_P_IP) {
+		    if (buf[23] == IPPROTO_UDP) {
+					return quic;
+		    } else {
+				return dst == quic ? NM_BDG_NOPORT : host;
+			}
+		} else {
+			return dst == quic ? NM_BDG_NOPORT : host;
+		}
+	}
 	return dst;
 }
 
