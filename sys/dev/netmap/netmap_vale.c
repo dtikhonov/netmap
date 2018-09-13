@@ -555,6 +555,9 @@ uint32_t
 netmap_bdg_learning(struct nm_bdg_fwd *ft, uint8_t *dst_ring,
 		struct netmap_vp_adapter *na, void *private_data)
 {
+	int link = 0;
+	int host = 1;
+	int data = 2;
 	uint8_t *buf = ((uint8_t *)ft->ft_buf) + ft->ft_offset;
 	u_int buf_len = ft->ft_len - ft->ft_offset;
 	struct nm_hash_ent *ht = private_data;
@@ -582,7 +585,7 @@ netmap_bdg_learning(struct nm_bdg_fwd *ft, uint8_t *dst_ring,
 	 * The hash is somewhat expensive, there might be some
 	 * worthwhile optimizations here.
 	 */
-	if (((buf[6] & 1) == 0) && (na->last_smac != smac)) { /* valid src */
+	if (((buf[6] & 1) == 0) && (na->last_smac != smac) && mysrc != data) {
 		uint8_t *s = buf+6;
 		sh = nm_bridge_rthash(s); /* hash of source */
 		/* update source port forwarding entry */
@@ -599,17 +602,9 @@ netmap_bdg_learning(struct nm_bdg_fwd *ft, uint8_t *dst_ring,
 			dst = ht[dh].ports;
 		}
 	}
-	int host = 1;
-	int quic = 2;
-	if (dst == NM_BDG_BROADCAST || dst == quic) {
-		if (ntohs((uint16_t *)buf[12]) == ETH_P_IP) {
-		    if (buf[23] == IPPROTO_UDP) {
-					return quic;
-		    } else {
-				return dst == quic ? NM_BDG_NOPORT : host;
-			}
-		} else {
-			return dst == quic ? NM_BDG_NOPORT : host;
+	if (ntohs((uint16_t *)buf[12]) == ETH_P_IP) {
+		if (buf[23] == IPPROTO_UDP) {
+			return data == mysrc ? link : data;
 		}
 	}
 	return dst;
